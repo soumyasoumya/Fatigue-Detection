@@ -1,0 +1,102 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+from collections import deque
+ 
+# Initialize Mediapipe Face Mesh
+mp_face_mesh = mp.solutions.face_mesh
+ 
+# Landmark indices
+LEFT_EYE = [33, 160, 158, 133, 153, 144]
+RIGHT_EYE = [362, 385, 387, 263, 373, 380]
+MOUTH = [13, 14, 78, 308]
+NOSE = [1]
+ 
+# EAR Threshold for fatigue
+EAR_THRESH = 0.20
+ 
+# Buffers
+ear_buffer = deque(maxlen=5)
+ 
+def calculate_ear(landmarks, eye_indices):
+    try:
+        p1 = np.array(landmarks[eye_indices[0]])
+        p2 = np.array(landmarks[eye_indices[1]])
+        p3 = np.array(landmarks[eye_indices[2]])
+        p4 = np.array(landmarks[eye_indices[3]])
+        p5 = np.array(landmarks[eye_indices[4]])
+        p6 = np.array(landmarks[eye_indices[5]])
+ 
+        vertical_1 = np.linalg.norm(p2 - p6)
+        vertical_2 = np.linalg.norm(p3 - p5)
+        horizontal = np.linalg.norm(p1 - p4)
+ 
+        ear = (vertical_1 + vertical_2) / (2.0 * horizontal)
+        return ear
+    except Exception:
+        return None
+ 
+# Load input video
+input_video_path = r"C:\Users\si929838.ttl\Downloads\v1.mp4"
+cap = cv2.VideoCapture(input_video_path)
+if not cap.isOpened():
+    print("Error opening video file.")
+    exit()
+ 
+# Output video writer setup
+frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = cap.get(cv2.CAP_PROP_FPS)
+ 
+out = cv2.VideoWriter('output_fatigue_detection.avi',
+                      cv2.VideoWriter_fourcc(*'XVID'),
+                      fps, (frame_width, frame_height))
+ 
+with mp_face_mesh.FaceMesh(static_image_mode=False, refine_landmarks=True) as face_mesh:
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+ 
+        h, w = frame.shape[:2]
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = face_mesh.process(rgb)
+ 
+        if results.multi_face_landmarks:
+            face_landmarks = results.multi_face_landmarks[0]
+            landmarks = []
+            for lm in face_landmarks.landmark:
+                x, y = int(lm.x * w), int(lm.y * h)
+                landmarks.append((x, y))
+ 
+            # Draw key facial landmarks
+            for idx in LEFT_EYE + RIGHT_EYE + MOUTH + NOSE:
+                x, y = landmarks[idx]
+                cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+ 
+            # EAR calculation
+            left_ear = calculate_ear(landmarks, LEFT_EYE)
+            right_ear = calculate_ear(landmarks, RIGHT_EYE)
+            if left_ear and right_ear:
+                ear = (left_ear + right_ear) / 2
+                ear_buffer.append(ear)
+                smooth_ear = np.mean(ear_buffer)
+ 
+                # Fatigue status based on EAR
+                if smooth_ear < EAR_THRESH:
+                    status = "Mild Fatigue"
+                    color = (0, 255, 255)
+                else:
+                    status = "Normal"
+                    color = (0, 255, 0)
+ 
+                cv2.putText(frame, f'Status: {status}', (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+ 
+        out.write(frame)
+        cv2.imshow("Fatigue Detection", frame)
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+ 
+cap.release()
+out.release()
